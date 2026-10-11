@@ -48,7 +48,7 @@ v1.3 — Volume Sliders + Licensing System
   - Feature gating via License.hasFeature()
   - Stored in chrome.storage.sync (persists across devices)
   - Activation modal in popup
-  - Test keys: TPC-PREM-* for Premium, TPC-PRO-* for Pro
+  - Paid plans are not for sale. Prefix keys are not accepted.
 - Volume sliders visible but locked for free users (conversion tactic)
 - Clicking locked slider opens upgrade modal
 - Tier badge in header (gold for Premium, purple for Pro)
@@ -127,10 +127,10 @@ LIFETIME option: ~$49.99 (consider offering this too)
 
 BEFORE SELLING — TODO
 =====================
-1. Replace test key validation in license.js with real server
-   (Gumroad, LemonSqueezy, or custom API)
+1. Add a license server. license.js accepts a record only when serverValidated is true.
+   Prefix keys are rejected.
 2. Build remaining Premium features (sleep timer, speed control, profiles)
-3. Set up a purchase page and update the "Get a license key" link
+3. Set up a purchase page. The popup no longer asks for a license key.
 4. Test on Chrome, Edge, Brave (currently tested on Vivaldi)
 5. Consider Chrome Web Store submission
 6. Add privacy policy page

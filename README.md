@@ -66,7 +66,7 @@ ConducTab uses a tiered licensing model:
 - **Premium**: Volume mixing, sound profiles, sleep timer, playback speed, PiP
 - **Pro**: Everything in Premium plus focus scheduler, audio ducking, API access, and more
 
-Activate a license key via the Upgrade button in the popup footer.
+Paid plans are not for sale. The extension does not accept a license key until a server checks it.
 
 ## Technical Details
 
@@ -107,15 +107,6 @@ extension/
 1. Make changes to the source files
 2. Load the extension in Chrome using "Load unpacked" (select the `extension/` folder)
 3. Click the refresh button in `chrome://extensions/` to reload after changes
-
-### Test License Keys
-
-For development, use these prefixes:
-
-- `TPC-PREM-*` activates Premium tier
-- `TPC-PRO-*` activates Pro tier
-
-Replace with server-side validation before production release.
 
 ## Browser Compatibility [Chromium-based]
 

@@ -13,58 +13,9 @@ async function loadState() {
   }
 }
 
-// Save state to storage
-async function saveState() {
-  await chrome.storage.local.set({
-    mediaTabs: JSON.stringify(Array.from(mediaTabs.entries()))
-  });
-}
-
-// Check a single tab for media (used only for manual refresh)
-async function checkTabForMedia(tabId) {
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    if (!tab.url || tab.url.startsWith('chrome') || tab.url.startsWith('about') || tab.url.startsWith('edge')) {
-      // Remove from tracking if it was previously tracked
-      if (mediaTabs.delete(tabId)) await saveState();
-      return false;
-    }
-
-    const [result] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        const allMedia = document.querySelectorAll('video, audio');
-        for (const media of allMedia) {
-          const hasSrc = media.currentSrc || media.src || media.querySelector('source');
-          // Require duration > 5s to filter out notification sounds and tiny audio clips
-          const hasDuration = media.duration > 5;
-          if (hasSrc && hasDuration) {
-            return { hasMedia: true, isPlaying: !media.paused };
-          }
-        }
-        return { hasMedia: false, isPlaying: false };
-      }
-    });
-
-    if (result?.result?.hasMedia) {
-      mediaTabs.set(tabId, {
-        id: tabId,
-        title: tab.title,
-        url: tab.url,
-        favIconUrl: tab.favIconUrl,
-        isPlaying: result.result.isPlaying
-      });
-      return true;
-    } else {
-      // Tab no longer has qualifying media — remove it
-      mediaTabs.delete(tabId);
-      return false;
-    }
-  } catch (error) {
-    // Tab closed or restricted — remove it
-    mediaTabs.delete(tabId);
-  }
-  return false;
+function safeIcon(url) {
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) return url;
+  return 'icon.png';
 }
 
 // Focus browser on a specific tab
@@ -107,70 +58,13 @@ function getDomainLabel(domain) {
   return labels[domain] || domain;
 }
 
-// Toggle playback for a specific tab
 async function toggleTabPlayback(tabId) {
-  const tabInfo = mediaTabs.get(tabId);
-  if (!tabInfo) return;
-
-  try {
-    const [result] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (shouldPause) => {
-        const mediaElements = document.querySelectorAll('video, audio');
-        let newState = !shouldPause;
-
-        mediaElements.forEach(media => {
-          if (shouldPause) {
-            media.pause();
-          } else {
-            media.play().catch(() => {
-              const playButton = media.closest('video')?.querySelector('.ytp-play-button') ||
-                               media.closest('audio')?.parentElement?.querySelector('[aria-label="Play"]');
-              if (playButton) playButton.click();
-            });
-          }
-        });
-        return newState;
-      },
-      args: [tabInfo.isPlaying]
-    });
-
-    if (result?.result !== undefined) {
-      mediaTabs.set(tabId, {
-        ...tabInfo,
-        isPlaying: result.result,
-        lastAccessed: Date.now()
-      });
-      await saveState();
-    }
-  } catch (error) {
-    console.error(`Error toggling tab ${tabId}:`, error);
-  }
-  updateTabsList();
+  await chrome.runtime.sendMessage({ type: 'toggle-tab', tabId });
+  await updateTabsList();
 }
 
-// Set volume for a specific tab
 async function setTabVolume(tabId, volume) {
-  const tabInfo = mediaTabs.get(tabId);
-  if (!tabInfo) return;
-
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (vol) => {
-        const allMedia = document.querySelectorAll('video, audio');
-        allMedia.forEach(media => {
-          media.volume = vol;
-        });
-      },
-      args: [volume]
-    });
-
-    mediaTabs.set(tabId, { ...tabInfo, volume });
-    await saveState();
-  } catch (error) {
-    console.error(`Error setting volume for tab ${tabId}:`, error);
-  }
+  await chrome.runtime.sendMessage({ type: 'set-volume', tabId, volume });
 }
 
 // SVG icons
@@ -189,20 +83,16 @@ function createTabElement(tabInfo) {
   const currentVolume = tabInfo.volume !== undefined ? tabInfo.volume : 1;
   const volumePercent = Math.round(currentVolume * 100);
 
-  const statusText = tabInfo.isPlaying
-    ? `${EQUALIZER_HTML} Playing`
-    : 'Paused';
-
   tabEl.innerHTML = `
     <div class="tab-icon-wrap">
-      <img src="${tabInfo.favIconUrl || 'icon.png'}" alt="">
+      <img alt="">
       <span class="status-dot ${tabInfo.isPlaying ? 'playing' : 'paused'}"></span>
     </div>
     <div class="tab-details">
       <div class="tab-row">
         <div class="tab-info">
-          <span class="tab-title" title="${tabInfo.title}">${tabInfo.title}</span>
-          <span class="tab-status ${tabInfo.isPlaying ? 'is-playing' : ''}">${statusText}</span>
+          <span class="tab-title"></span>
+          <span class="tab-status ${tabInfo.isPlaying ? 'is-playing' : ''}"></span>
         </div>
         <button class="toggleBtn ${tabInfo.isPlaying ? 'is-playing' : ''}" data-id="${tabInfo.id}">
           ${tabInfo.isPlaying ? ICON_PAUSE : ICON_PLAY}
@@ -216,6 +106,20 @@ function createTabElement(tabInfo) {
       </div>
     </div>
   `;
+
+  const icon = tabEl.querySelector('img');
+  icon.src = safeIcon(tabInfo.favIconUrl);
+  const titleEl = tabEl.querySelector('.tab-title');
+  const title = tabInfo.title || 'Untitled tab';
+  titleEl.textContent = title;
+  titleEl.title = title;
+  const statusEl = tabEl.querySelector('.tab-status');
+  if (tabInfo.isPlaying) {
+    statusEl.innerHTML = EQUALIZER_HTML;
+    statusEl.append(' Playing');
+  } else {
+    statusEl.textContent = 'Paused';
+  }
 
   // Click title to focus tab in browser
   tabEl.querySelector('.tab-info').addEventListener('click', () => {
@@ -303,11 +207,14 @@ async function updateTabsList() {
         <svg class="group-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
-        ${label}
-        <span class="group-count">${tabs.length}</span>
+        <span class="group-name"></span>
+        <span class="group-count"></span>
       </span>
-      <span class="group-status">${playingCount > 0 ? `${playingCount} playing` : 'paused'}</span>
+      <span class="group-status"></span>
     `;
+    headerEl.querySelector('.group-name').textContent = label;
+    headerEl.querySelector('.group-count').textContent = String(tabs.length);
+    headerEl.querySelector('.group-status').textContent = playingCount > 0 ? `${playingCount} playing` : 'paused';
 
     const contentEl = document.createElement('div');
     contentEl.className = 'group-content';
@@ -341,25 +248,23 @@ async function updateLicenseUI() {
 
   const badge = document.getElementById('tierBadge');
   const licenseBtn = document.getElementById('licenseBtn');
-  const activateForm = document.getElementById('activateForm');
-  const deactivateSection = document.getElementById('deactivateSection');
   const statusEl = document.getElementById('licenseStatus');
 
   if (license.tier !== License.TIERS.FREE) {
     badge.textContent = license.tier.toUpperCase();
     badge.className = `tier-badge ${license.tier}`;
     licenseBtn.textContent = 'License';
-    statusEl.textContent = `${license.tier.charAt(0).toUpperCase() + license.tier.slice(1)} license active`;
-    statusEl.className = 'license-status active';
-    activateForm.classList.add('hidden');
-    deactivateSection.classList.remove('hidden');
+    if (statusEl) {
+      statusEl.textContent = `${license.tier.charAt(0).toUpperCase() + license.tier.slice(1)} license active`;
+      statusEl.className = 'license-status active';
+    }
   } else {
     badge.className = 'tier-badge hidden';
     licenseBtn.textContent = 'Upgrade';
-    statusEl.textContent = '';
-    statusEl.className = 'license-status';
-    activateForm.classList.remove('hidden');
-    deactivateSection.classList.add('hidden');
+    if (statusEl) {
+      statusEl.textContent = '';
+      statusEl.className = 'license-status';
+    }
   }
 }
 
@@ -393,30 +298,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('licenseModal').classList.add('hidden');
   });
 
-  document.getElementById('activateBtn').addEventListener('click', async () => {
-    const key = document.getElementById('licenseKey').value.trim();
-    if (!key) return;
-
-    const result = await License.activate(key);
-    const statusEl = document.getElementById('licenseStatus');
-
-    if (result.success) {
-      statusEl.textContent = `${result.tier.charAt(0).toUpperCase() + result.tier.slice(1)} license activated!`;
-      statusEl.className = 'license-status active';
-      await updateLicenseUI();
-      await updateTabsList();
-    } else {
-      statusEl.textContent = result.error;
-      statusEl.className = 'license-status error';
-    }
-  });
-
-  document.getElementById('deactivateBtn').addEventListener('click', async () => {
-    await License.deactivate();
-    await updateLicenseUI();
-    await updateTabsList();
-  });
-
   // Re-render if license changes from another device
   License.onChange(async () => {
     await updateLicenseUI();
@@ -426,32 +307,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // Control buttons
 document.getElementById('pauseAll').addEventListener('click', async () => {
-  await loadState();
-  for (const [tabId, tabInfo] of mediaTabs) {
-    if (tabInfo.isPlaying) {
-      await toggleTabPlayback(tabId);
-    }
-  }
+  await chrome.runtime.sendMessage({ type: 'set-playing-all', pause: true });
+  await updateTabsList();
 });
 
 document.getElementById('playAll').addEventListener('click', async () => {
-  await loadState();
-  for (const [tabId, tabInfo] of mediaTabs) {
-    if (!tabInfo.isPlaying) {
-      await toggleTabPlayback(tabId);
-    }
-  }
+  await chrome.runtime.sendMessage({ type: 'set-playing-all', pause: false });
+  await updateTabsList();
 });
 
 document.getElementById('refreshBtn').addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   btn.classList.add('spinning');
-
-  // Clear existing entries and do a fresh scan of all tabs
-  mediaTabs.clear();
-  const tabs = await chrome.tabs.query({});
-  await Promise.all(tabs.map(tab => checkTabForMedia(tab.id)));
-  await saveState();
+  await chrome.runtime.sendMessage({ type: 'refresh-media' });
   await updateTabsList();
   setTimeout(() => btn.classList.remove('spinning'), 600);
 });

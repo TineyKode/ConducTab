@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "ConducTab",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Control audio playback across tabs in Chrome-based browsers",
     "permissions": [
       "tabs",

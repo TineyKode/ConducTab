@@ -25,16 +25,32 @@ const License = {
 
   _cache: null,
 
-  // Get current license state
-  async get() {
-    if (this._cache) return this._cache;
-    const stored = await chrome.storage.sync.get('license');
-    this._cache = stored.license || {
+  freeLicense() {
+    return {
       tier: this.TIERS.FREE,
       key: null,
       activatedAt: null,
       expiresAt: null,
     };
+  },
+
+  // Paid tiers are accepted only after a server marks the record.
+  // Prefix keys stored by older builds are cleared.
+  async get() {
+    if (this._cache) return this._cache;
+    const stored = await chrome.storage.sync.get('license');
+    const license = stored.license;
+    const trusted = license
+      && license.serverValidated === true
+      && (license.tier === this.TIERS.PREMIUM || license.tier === this.TIERS.PRO);
+    if (trusted) {
+      this._cache = license;
+      return this._cache;
+    }
+    if (license && license.tier && license.tier !== this.TIERS.FREE) {
+      await chrome.storage.sync.set({ license: this.freeLicense() });
+    }
+    this._cache = this.freeLicense();
     return this._cache;
   },
 
@@ -55,43 +71,14 @@ const License = {
     return license.tier !== this.TIERS.FREE;
   },
 
-  // Activate a license key
-  // TODO: Replace with real server validation when backend is ready
-  async activate(key) {
-    // For now, accept specific test keys for development
-    // Replace this with an API call to your license server
-    let tier = null;
-
-    if (key.startsWith('TPC-PREM-')) {
-      tier = this.TIERS.PREMIUM;
-    } else if (key.startsWith('TPC-PRO-')) {
-      tier = this.TIERS.PRO;
-    }
-
-    if (!tier) {
-      return { success: false, error: 'Invalid license key' };
-    }
-
-    const license = {
-      tier,
-      key,
-      activatedAt: Date.now(),
-      expiresAt: null, // null = lifetime, or set a timestamp for subscriptions
-    };
-
-    await chrome.storage.sync.set({ license });
-    this._cache = license;
-    return { success: true, tier };
+  // Paid plans stay locked until a license server checks the key.
+  async activate() {
+    return { success: false, error: 'Paid plans are not available yet.' };
   },
 
   // Deactivate / reset to free
   async deactivate() {
-    const license = {
-      tier: this.TIERS.FREE,
-      key: null,
-      activatedAt: null,
-      expiresAt: null,
-    };
+    const license = this.freeLicense();
     await chrome.storage.sync.set({ license });
     this._cache = license;
   },
@@ -100,8 +87,8 @@ const License = {
   onChange(callback) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'sync' && changes.license) {
-        this._cache = changes.license.newValue;
-        callback(this._cache);
+        this._cache = null;
+        this.get().then(callback);
       }
     });
   },
